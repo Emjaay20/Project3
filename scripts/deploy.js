@@ -23,13 +23,6 @@ async function main() {
 
     console.log("Contract deployment confirmed!");
 
-    // Verify contract on Etherscan (optional)
-    console.log("Verifying contract on Etherscan...");
-    await hre.run("verify:verify", {
-      address: hashStorage.address,
-      constructorArguments: [],
-    });
-
   } catch (error) {
     console.error("Deployment failed:", error);
     process.exit(1);
