@@ -15,7 +15,6 @@
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
-    "dotenv": "^16.4.7",
     "ethers": "^6.13.5",
     "express": "^4.21.2",
     "helmet": "^8.0.0",
@@ -24,6 +23,10 @@
     "morgan": "^1.10.0"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomiclabs/hardhat-etherscan": "^3.1.8",
+    "dotenv": "^16.4.7",
+    "hardhat": "^2.22.18",
     "nodemon": "^3.1.9"
   }
 }
