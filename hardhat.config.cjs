@@ -1,5 +1,4 @@
 require("@nomicfoundation/hardhat-toolbox");
-require("@nomiclabs/hardhat-etherscan");
 require("dotenv").config();
 
 const INFURA_API_KEY = process.env.INFURA_API_KEY;
