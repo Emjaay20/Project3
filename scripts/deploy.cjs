@@ -2,33 +2,29 @@ require("dotenv").config();
 const { ethers } = require("hardhat");
 
 async function main() {
-  try {
-    // Get the contract factory
-    const HashStorage = await ethers.getContractFactory("HashStorage");
+  console.log("Deploying HashStorage contract...");
 
-    console.log("Deploying HashStorage contract...");
+  // Get the contract factory
+  const HashStorage = await ethers.getContractFactory("HashStorage");
 
-    // Deploy the contract
-    const hashStorage = await HashStorage.deploy();
+  // Deploy the contract
+  const hashStorage = await HashStorage.deploy();
 
-    // Wait for deployment to finish
-    await hashStorage.deployed();
+  // Wait for deployment to finish
+  await hashStorage.waitForDeployment();
 
-    console.log("HashStorage deployed to:", hashStorage.address);
-    console.log("Transaction hash:", hashStorage.deployTransaction.hash);
+  // Get the deployed contract address
+  const address = await hashStorage.getAddress();
 
-    // Wait for few block confirmations
-    console.log("Waiting for block confirmations...");
-    await hashStorage.deployTransaction.wait(5);
+  console.log("HashStorage deployed to:", address);
 
-    console.log("Contract deployment confirmed!");
-
-  } catch (error) {
-    console.error("Deployment failed:", error);
-    process.exit(1);
-  }
+  console.log("Verifying contract on Etherscan...");
+  await hre.run("verify:verify", {
+    address: address,
+    constructorArguments: [],
+  });
 }
-
+// Run the script
 main()
   .then(() => process.exit(0))
   .catch((error) => {
