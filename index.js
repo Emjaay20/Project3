@@ -15,8 +15,6 @@ import sensorDataRoutes from "./routes/sensorData.js";
 import BodyTemperature from "./models/BodyTemperature.js";
 import OxygenSaturation from "./models/OxygenSaturation.js";
 import HeartRate from "./models/HeartRate.js";
-// Optional DATA Seeding 
-import { oxygensaturations,heartrates,bodytemperatures } from "./data/data.js";
 
 /*** configurations  */
 dotenv.config();
@@ -28,9 +26,6 @@ app.use(morgan("common"));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cors());
-
-console.log("hello world");
-console.log("4kt");
 
 /** Routes */
 app.use("/oxygensaturation", oxygensaturationRoutes);
@@ -44,14 +39,19 @@ app.use("/api/sensor-data", sensorDataRoutes);
 /**** Mongoose Setups */
 
 const PORT = process.env.PORT || 9000;
-mongoose
-  .connect(process.env.MONGO_URL)
-  .then(async () => {
-    app.listen(PORT, () => console.log(`Server Port: ${PORT}`));
-    // Add data once
-    // await mongoose.connection.db.dropDatabase();
-    // OxygenSaturation.insertMany(oxygensaturations)
-    //  HeartRate.insertMany(heartrates);
-    // BodyTemperature.insertMany(bodytemperatures);
-  })
-  .catch((error) => console.error(`${error} did not connect`));
+
+const startServer = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URL);
+    console.log('Connected to MongoDB successfully');
+
+    app.listen(PORT, () => {
+      console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to connect to MongoDB:', error.message);
+    process.exit(1);
+  }
+};
+
+startServer();
