@@ -1,7 +1,7 @@
 import express from "express";
 import moment from "moment";
 import crypto from "crypto";
-import { ethers } from "ethers";
+import { ethers, JsonRpcProvider, Wallet, Contract } from "ethers";
 
 // Models
 import OxygenSaturation from "../models/OxygenSaturation.js";
@@ -12,12 +12,15 @@ const router = express.Router();
 
 // Minimal "human-readable" ABI for a contract with `storeReading(bytes32 readingHash)`
 const contractABI = [
-  "function storeReading(bytes32 readingHash) public returns (bool)"
+  "function storeHash(bytes32 _dataHash) public returns (uint256)"
 ];
 
 router.post("/", async (req, res) => {
   try {
     const { temperature, heartRate, spo2 } = req.body;
+    if (!temperature || !heartRate || !spo2) return res.status(400).json({
+      message: "Missing Fields",
+    });
 
     // You have these IDs from your data.js:
     // Oxygen = "100", Body Temp = "101", Heart Rate = "102"
@@ -131,22 +134,39 @@ router.post("/", async (req, res) => {
       .update(readingString)
       .digest("hex");
 
-    const provider = new ethers.providers.JsonRpcProvider(
-      process.env.INFURA_URL
-    );
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-    const contract = new ethers.Contract(process.env.CONTRACT_ADDRESS, contractABI, wallet);
+    // Add error handling and logging for blockchain operations
+    try {
+      console.log("Connecting to Infura URL:", process.env.INFURA_URL);
+      const provider = new JsonRpcProvider(process.env.INFURA_URL);
 
-    // storeReading requires a bytes32 => "0x" + 64 hex chars
-    const tx = await contract.storeReading("0x" + hashHex);
-    await tx.wait();
+      // Wait for provider to be ready
+      await provider.ready;
 
-    console.log("Transaction hash:", tx.hash);
+      // Get the network to verify connection
+      const network = await provider.getNetwork();
+      console.log("Connected to network:", network.name);
 
-    res.status(200).json({
-      message: "Sensor data updated & hash stored on blockchain",
-      chainTx: tx.hash,
-    });
+      const wallet = new Wallet(process.env.PRIVATE_KEY, provider);
+      const contract = new Contract(process.env.CONTRACT_ADDRESS, contractABI, wallet);
+
+      // storeReading requires a bytes32 => "0x" + 64 hex chars
+      const tx = await contract.storeHash("0x" + hashHex);
+      await tx.wait();
+
+      console.log("Transaction hash:", tx.hash);
+
+      res.status(200).json({
+        message: "Sensor data updated & hash stored on blockchain",
+        chainTx: tx.hash,
+      });
+    } catch (blockchainError) {
+      console.error("Blockchain error:", blockchainError);
+      res.status(500).json({
+        error: "Blockchain operation failed",
+        details: blockchainError.message
+      });
+    }
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
