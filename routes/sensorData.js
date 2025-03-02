@@ -2,170 +2,132 @@ import express from "express";
 import moment from "moment";
 import crypto from "crypto";
 import { ethers, JsonRpcProvider, Wallet, Contract } from "ethers";
+import mongoose from "mongoose";
 
 // Models
 import OxygenSaturation from "../models/OxygenSaturation.js";
 import BodyTemperature from "../models/BodyTemperature.js";
 import HeartRate from "../models/HeartRate.js";
+import BlockchainLog from "../models/BlockchainLog.js"; 
 
 const router = express.Router();
 
-// Minimal "human-readable" ABI for a contract with `storeReading(bytes32 readingHash)`
+// Smart Contract ABI
 const contractABI = [
   "function storeHash(bytes32 _dataHash) public returns (uint256)"
 ];
 
+// Optimize MongoDB Queries: Create Indexes
+(async () => {
+  await OxygenSaturation.createIndexes({ _id: 1 });
+  await BodyTemperature.createIndexes({ _id: 1 });
+  await HeartRate.createIndexes({ _id: 1 });
+})();
+
 router.post("/", async (req, res) => {
   try {
     const { temperature, heartRate, spo2 } = req.body;
-    if (!temperature || !heartRate || !spo2) return res.status(400).json({
-      message: "Missing Fields",
-    });
+    if (!temperature || !heartRate || !spo2) {
+      return res.status(400).json({ message: "Missing Fields" });
+    }
 
-    // You have these IDs from your data.js:
-    // Oxygen = "100", Body Temp = "101", Heart Rate = "102"
-    const oxygenDoc = await OxygenSaturation.findById("100");
-    const bodyTempDoc = await BodyTemperature.findById("101");
-    const heartRateDoc = await HeartRate.findById("102");
+    const monthString = moment().format("MMMM").toLowerCase();
+    const dateString = moment().format("YYYY-MM-DD");
 
-    // Current month string, e.g. "February" (title-cased or lower-cased as you prefer)
-    const monthString = moment().format("MMMM").toLowerCase(); // e.g. "march"
-    const dateString = moment().format("YYYY-MM-DD"); // e.g. "2025-03-10"
+    /**********************************
+     * ✅ 1) Run Database Queries in Parallel
+     **********************************/
+    const [oxygenDoc, bodyTempDoc, heartRateDoc, lastHashRecord] = await Promise.all([
+      OxygenSaturation.findById("100").lean(),
+      BodyTemperature.findById("101").lean(),
+      HeartRate.findById("102").lean(),
+      BlockchainLog.findOne().sort({ createdAt: -1 }).lean()
+    ]);
 
-    /**************************************
-     * 1) Update Oxygen Saturation
-     **************************************/
+    /**********************************
+     * ✅ 2) Compute Hash Before Blockchain Call
+     **********************************/
+    const readingData = { temperature, heartRate, spo2, timestamp: Date.now() };
+    const readingString = JSON.stringify(readingData);
+    const newHash = crypto.createHash("sha256").update(readingString).digest("hex");
+
+    const sendToBlockchain = !lastHashRecord || lastHashRecord.hash !== newHash;
+
+    /**********************************
+     * ✅ 3) Update MongoDB in Parallel
+     **********************************/
+    const updates = [];
+
     if (oxygenDoc) {
-      let monthly = oxygenDoc.monthlyData.find(
-        (m) => m.month.toLowerCase() === monthString
-      );
+      let monthly = oxygenDoc.monthlyData.find(m => m.month.toLowerCase() === monthString);
       if (!monthly) {
-        monthly = {
-          month: monthString,
-          average: spo2,
-          min: spo2,
-          max: spo2,
-          readings: [],
-        };
+        monthly = { month: monthString, average: spo2, min: spo2, max: spo2, readings: [] };
         oxygenDoc.monthlyData.push(monthly);
       }
-      // push new reading
-      monthly.readings.push({
-        date: new Date(), // or could store dateString as well
-        value: spo2,
-      });
-      // recalc min, max, average
-      const values = monthly.readings.map((r) => r.value);
+      monthly.readings.push({ date: new Date(), value: spo2 });
+      const values = monthly.readings.map(r => r.value);
       monthly.min = Math.min(...values);
       monthly.max = Math.max(...values);
       monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
-      await oxygenDoc.save();
+      updates.push(OxygenSaturation.updateOne({ _id: "100" }, { $set: oxygenDoc }));
     }
 
-    /**************************************
-     * 2) Update Body Temperature
-     **************************************/
     if (bodyTempDoc) {
-      let monthly = bodyTempDoc.monthlyData.find(
-        (m) => m.month.toLowerCase() === monthString
-      );
+      let monthly = bodyTempDoc.monthlyData.find(m => m.month.toLowerCase() === monthString);
       if (!monthly) {
-        monthly = {
-          month: monthString,
-          average: temperature,
-          min: temperature,
-          max: temperature,
-          readings: [],
-        };
+        monthly = { month: monthString, average: temperature, min: temperature, max: temperature, readings: [] };
         bodyTempDoc.monthlyData.push(monthly);
       }
-      monthly.readings.push({
-        date: dateString,
-        value: temperature,
-      });
-      const values = monthly.readings.map((r) => r.value);
+      monthly.readings.push({ date: dateString, value: temperature });
+      const values = monthly.readings.map(r => r.value);
       monthly.min = Math.min(...values);
       monthly.max = Math.max(...values);
       monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
-      await bodyTempDoc.save();
+      updates.push(BodyTemperature.updateOne({ _id: "101" }, { $set: bodyTempDoc }));
     }
 
-    /**************************************
-     * 3) Update Heart Rate
-     **************************************/
     if (heartRateDoc) {
-      let monthly = heartRateDoc.monthlyData.find(
-        (m) => m.month.toLowerCase() === monthString
-      );
+      let monthly = heartRateDoc.monthlyData.find(m => m.month.toLowerCase() === monthString);
       if (!monthly) {
-        monthly = {
-          month: monthString,
-          average: heartRate,
-          min: heartRate,
-          max: heartRate,
-          readings: [],
-        };
+        monthly = { month: monthString, average: heartRate, min: heartRate, max: heartRate, readings: [] };
         heartRateDoc.monthlyData.push(monthly);
       }
-      monthly.readings.push({
-        date: dateString,
-        value: heartRate,
-      });
-      const values = monthly.readings.map((r) => r.value);
+      monthly.readings.push({ date: dateString, value: heartRate });
+      const values = monthly.readings.map(r => r.value);
       monthly.min = Math.min(...values);
       monthly.max = Math.max(...values);
       monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
-      await heartRateDoc.save();
+      updates.push(HeartRate.updateOne({ _id: "102" }, { $set: heartRateDoc }));
     }
 
-    /**************************************
-     * 4) Blockchain - hash + store
-     **************************************/
-    // Build a JSON object with the reading
-    const readingData = {
-      temperature,
-      heartRate,
-      spo2,
-      timestamp: Date.now(),
-    };
-    const readingString = JSON.stringify(readingData);
-    const hashHex = crypto
-      .createHash("sha256")
-      .update(readingString)
-      .digest("hex");
+    await Promise.all(updates); // ✅ Run all MongoDB updates in parallel
 
-    // Add error handling and logging for blockchain operations
-    try {
-      console.log("Connecting to Infura URL:", process.env.INFURA_URL);
+    /**********************************
+     * ✅ 4) Send to Blockchain (Only If Data Changes)
+     **********************************/
+    if (sendToBlockchain) {
+      console.log("Connecting to Infura...");
       const provider = new JsonRpcProvider(process.env.INFURA_URL);
-
-      // Wait for provider to be ready
-      await provider.ready;
-
-      // Get the network to verify connection
-      const network = await provider.getNetwork();
-      console.log("Connected to network:", network.name);
-
       const wallet = new Wallet(process.env.PRIVATE_KEY, provider);
       const contract = new Contract(process.env.CONTRACT_ADDRESS, contractABI, wallet);
 
-      // storeReading requires a bytes32 => "0x" + 64 hex chars
-      const tx = await contract.storeHash("0x" + hashHex);
-      await tx.wait();
-
-      console.log("Transaction hash:", tx.hash);
-
-      res.status(200).json({
-        message: "Sensor data updated & hash stored on blockchain",
-        chainTx: tx.hash,
-      });
-    } catch (blockchainError) {
-      console.error("Blockchain error:", blockchainError);
-      res.status(500).json({
-        error: "Blockchain operation failed",
-        details: blockchainError.message
-      });
+      contract.storeHash("0x" + newHash)
+        .then(tx => {
+          console.log("Blockchain TX Hash:", tx.hash);
+          BlockchainLog.create({ hash: newHash, transactionHash: tx.hash });
+        })
+        .catch(err => console.error("Blockchain error:", err));
+    } else {
+      console.log("No data change detected. Skipping blockchain transaction.");
     }
+
+    /**********************************
+     * ✅ 5) Send Response Immediately
+     **********************************/
+    return res.status(200).json({
+      message: "Sensor data updated",
+      blockchainTransaction: sendToBlockchain ? "Sent to Blockchain" : "Not Sent (No Change)"
+    });
 
   } catch (err) {
     console.error(err);
