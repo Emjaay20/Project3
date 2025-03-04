@@ -24,6 +24,11 @@ const contractABI = [
   await HeartRate.createIndexes({ _id: 1 });
 })();
 
+// Function to compute Z-score for outlier detection
+function isOutlier(value, mean, stdDev) {
+  return Math.abs((value - mean) / stdDev) > 3;
+}
+
 router.post("/", async (req, res) => {
   try {
     const { temperature, heartRate, spo2 } = req.body;
@@ -44,14 +49,26 @@ router.post("/", async (req, res) => {
       BlockchainLog.findOne().sort({ createdAt: -1 }).lean()
     ]);
 
-    /**********************************
-     * ✅ 2) Compute Hash Before Blockchain Call
-     **********************************/
+    // Compute Hash Before Blockchain Call
     const readingData = { temperature, heartRate, spo2, timestamp: Date.now() };
     const readingString = JSON.stringify(readingData);
     const newHash = crypto.createHash("sha256").update(readingString).digest("hex");
-
     const sendToBlockchain = !lastHashRecord || lastHashRecord.hash !== newHash;
+
+    /**********************************
+     * ✅ 2) Outlier Detection (Z-score)
+     **********************************/
+    if (bodyTempDoc && heartRateDoc && oxygenDoc) {
+      const tempReadings = bodyTempDoc.monthlyData.flatMap(m => m.readings.map(r => r.value));
+      const hrReadings = heartRateDoc.monthlyData.flatMap(m => m.readings.map(r => r.value));
+      const spo2Readings = oxygenDoc.monthlyData.flatMap(m => m.readings.map(r => r.value));
+      
+      const meanTemp = tempReadings.reduce((a, b) => a + b, 0) / tempReadings.length;
+      const stdTemp = Math.sqrt(tempReadings.map(x => Math.pow(x - meanTemp, 2)).reduce((a, b) => a + b, 0) / tempReadings.length);
+      if (isOutlier(temperature, meanTemp, stdTemp)) {
+        return res.status(400).json({ message: "Outlier detected in temperature data" });
+      }
+    }
 
     /**********************************
      * ✅ 3) Update MongoDB in Parallel
@@ -65,10 +82,6 @@ router.post("/", async (req, res) => {
         oxygenDoc.monthlyData.push(monthly);
       }
       monthly.readings.push({ date: new Date(), value: spo2 });
-      const values = monthly.readings.map(r => r.value);
-      monthly.min = Math.min(...values);
-      monthly.max = Math.max(...values);
-      monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
       updates.push(OxygenSaturation.updateOne({ _id: "100" }, { $set: oxygenDoc }));
     }
 
@@ -79,10 +92,6 @@ router.post("/", async (req, res) => {
         bodyTempDoc.monthlyData.push(monthly);
       }
       monthly.readings.push({ date: dateString, value: temperature });
-      const values = monthly.readings.map(r => r.value);
-      monthly.min = Math.min(...values);
-      monthly.max = Math.max(...values);
-      monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
       updates.push(BodyTemperature.updateOne({ _id: "101" }, { $set: bodyTempDoc }));
     }
 
@@ -93,14 +102,10 @@ router.post("/", async (req, res) => {
         heartRateDoc.monthlyData.push(monthly);
       }
       monthly.readings.push({ date: dateString, value: heartRate });
-      const values = monthly.readings.map(r => r.value);
-      monthly.min = Math.min(...values);
-      monthly.max = Math.max(...values);
-      monthly.average = values.reduce((a, b) => a + b, 0) / values.length;
       updates.push(HeartRate.updateOne({ _id: "102" }, { $set: heartRateDoc }));
     }
 
-    await Promise.all(updates); // ✅ Run all MongoDB updates in parallel
+    await Promise.all(updates); 
 
     /**********************************
      * ✅ 4) Send to Blockchain (Only If Data Changes)
@@ -117,18 +122,12 @@ router.post("/", async (req, res) => {
           BlockchainLog.create({ hash: newHash, transactionHash: tx.hash });
         })
         .catch(err => console.error("Blockchain error:", err));
-    } else {
-      console.log("No data change detected. Skipping blockchain transaction.");
     }
 
-    /**********************************
-     * ✅ 5) Send Response Immediately
-     **********************************/
     return res.status(200).json({
       message: "Sensor data updated",
       blockchainTransaction: sendToBlockchain ? "Sent to Blockchain" : "Not Sent (No Change)"
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
